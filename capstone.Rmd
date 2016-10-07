@@ -1,0 +1,444 @@
+---
+title: "Capstone Project"
+author: "Dong Dinh Hoang"
+date: "4 September 2016"
+output: html_document
+---
+
+# Introduction
+
+# Dataset
+
+## Download the dataset
+
+```{r eval=FALSE,echo=TRUE}
+library(downloader)
+url <- "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip"
+filename <- "Coursera-SwiftKey.zip"
+if (!file.exists(filename)) download(url, filename)
+unlink(url)
+unzip("Coursera-SwiftKey.zip")
+```
+
+There are three files in US English of the dataset.
+```{r echo=TRUE}
+list.files("final")
+list.files("final/en_US")
+```
+
+## Load data in r
+
+```{r echo=TRUE}
+blogs <- readLines("./final/en_US/en_US.blogs.txt", encoding = "UTF-8", skipNul=TRUE)
+news <- suppressWarnings(readLines("./final/en_US/en_US.news.txt", encoding = "UTF-8", skipNul=TRUE))
+twitter <- readLines("./final/en_US/en_US.twitter.txt", encoding = "UTF-8", skipNul=TRUE)
+```
+
+## Sampling
+
+Because the dataset is very big, a data sample from all three sources is generated in order to enable faster data processing.
+```{r echo=TRUE}
+set.seed(1234)
+sampleBlogs <- blogs[sample(1:length(blogs),length(blogs)*0.05)]
+sampleNews <- news[sample(1:length(news),length(news)*0.05)]
+sampleTwitter <- twitter[sample(1:length(twitter),length(twitter)*0.05)]
+textSample <- c(sampleBlogs,sampleNews,sampleTwitter)
+# dir.create("./sample")
+writeLines(textSample, "./sample/sample.txt")
+rm(blogs)
+rm(news)
+rm(twitter)
+rm(sampleBlogs)
+rm(sampleNews)
+rm(sampleTwitter)
+rm(textSample)
+# sample <- readLines("./sample/sample.txt",encoding = "UTF-8", skipNul=TRUE)
+```
+
+## Cleaning data
+
+This step removes punctuations, numbers, excess whitespace,URLs, special characters, and changes the text to lower case
+
+```{r echo=TRUE}
+library(RWeka)
+library(SnowballC)
+library(tm)
+cleand<-file.path("./sample")
+corpus <- Corpus(DirSource(cleand),readerControl = list(reader = readPlain))
+transto <- content_transformer(function(x, pattern) gsub(pattern, " ", x))
+corpus <- tm_map(corpus, transto, "/|@|\\|")
+corpus <- tm_map(corpus, PlainTextDocument)
+corpus <- tm_map(corpus, removePunctuation)
+corpus <- tm_map(corpus, removeNumbers)
+corpus <- tm_map(corpus, stripWhitespace)
+rm(cleand)
+rm(transto)
+```
+
+## Making reference books
+
+```{r echo=TRUE}
+unigramTokenizer <- function(x) {NGramTokenizer(x, Weka_control(min = 1, max = 1))}
+unigrams <- DocumentTermMatrix(corpus, control = list(tokenize = unigramTokenizer))
+rm(unigramTokenizer)
+BigramTokenizer <- function(x) {NGramTokenizer(x, Weka_control(min = 2, max = 2))}
+bigrams <- DocumentTermMatrix(corpus, control = list(tokenize = BigramTokenizer))
+rm(BigramTokenizer)
+TrigramTokenizer <- function(x) {NGramTokenizer(x, Weka_control(min = 3, max = 3))}
+trigrams <- DocumentTermMatrix(corpus, control = list(tokenize = TrigramTokenizer))
+rm(TrigramTokenizer)
+QuadgramTokenizer <- function(x) {NGramTokenizer(x, Weka_control(min = 4, max = 4))}
+quadgrams <- DocumentTermMatrix(corpus, control = list(tokenize = QuadgramTokenizer))
+rm(QuadgramTokenizer)
+rm(corpus)
+unigramfreq <- sort(colSums(as.matrix(unigrams)), decreasing=TRUE)
+uniwordfreq <- data.frame(word=names(unigramfreq),freq=unigramfreq,stringsAsFactors=FALSE)
+rm(unigramfreq)
+rownames(uniwordfreq) <- 1:length(uniwordfreq$word)
+rm(unigrams)
+# for searching 1 word
+bigramfreq <- sort(colSums(as.matrix(bigrams)), decreasing=TRUE)
+biwordfreq <- data.frame(word=names(bigramfreq),freq=bigramfreq,stringsAsFactors=FALSE)
+rm(bigramfreq)
+rownames(biwordfreq) <- 1:length(biwordfreq$word)
+bigramlist <- strsplit(biwordfreq$word," ")
+biwordfreq$start <- sapply(bigramlist,FUN=function(x) x[1])
+biwordfreq$end <- sapply(bigramlist,FUN=function(x) x[2])
+rm(bigramlist)
+rm(bigrams)
+# for searching 2 words
+trigramfreq <- sort(colSums(as.matrix(trigrams)), decreasing=TRUE)
+triwordfreq<-data.frame(word=names(trigramfreq),freq=trigramfreq,stringsAsFactors=FALSE)
+rm(trigramfreq)
+rownames(triwordfreq) <- 1:length(triwordfreq$word)
+trigramlist <- strsplit(triwordfreq$word, ' (?=[^ ]+$)', perl=TRUE)
+triwordfreq$start <- sapply(trigramlist,FUN=function(x) x[1])
+triwordfreq$end <- sapply(trigramlist,FUN=function(x) x[2])
+rm(trigramlist)
+rm(trigrams)
+# for searching 3 words
+quadgramfreq <- sort(colSums(as.matrix(quadgrams)), decreasing=TRUE)
+quadwordfreq<-data.frame(word=names(quadgramfreq),freq=quadgramfreq,stringsAsFactors=FALSE)
+rm(quadgramfreq)
+rownames(quadwordfreq) <- 1:length(quadwordfreq$word)
+quadgramlist <- strsplit(quadwordfreq$word, ' (?=[^ ]+$)', perl=TRUE)
+quadwordfreq$start <- sapply(quadgramlist,FUN=function(x) x[1])
+quadwordfreq$end <- sapply(quadgramlist,FUN=function(x) x[2])
+rm(quadgramlist)
+rm(quadgrams)
+save(uniwordfreq,biwordfreq, triwordfreq, quadwordfreq, file = "reference.RData")
+```
+
+## Making functions to search 
+
+```{r echo=TRUE}
+load("reference.RData")
+library(RWeka)
+library(SnowballC)
+library(tm)
+testing <- function(txt){
+    txt <- tolower(txt)
+    txt <- removeNumbers(txt)
+    txt <- removePunctuation(txt)
+    txt <- stripWhitespace(txt)
+    txt<-unlist(strsplit(txt," "))
+}
+topback <- function(t1){
+  if (length(t1)==1){
+    t2 <- biwordfreq[biwordfreq$start==t1,]
+    if (length(t2$end)==0){
+      head(uniwordfreq$word,5)
+    } else {
+      head(t2$end,5)
+    }
+  } else {
+    if (length(t1)==2){
+      t11 <- paste(t1[1],t1[2],sep = " ")
+      t3 <- triwordfreq[triwordfreq$start==t11,]
+      if (length(t3$end)==0){
+        t2 <- biwordfreq[biwordfreq$start==t1[2],]
+        if (length(t2$end)==0){
+          head(uniwordfreq$word,5)
+        } else {
+          head(t2$end,5)
+        }
+      } else {
+        head(t3$end,5)
+      }
+    } else {
+      t12 <- paste(t1[length(t1)-2],t1[length(t1)-1],t1[length(t1)],sep = " ")
+      t4 <- quadwordfreq[quadwordfreq$start==t12,]
+      if (length(t4$end)==0){
+        t11 <- paste(t1[length(t1)-1],t1[length(t1)],sep = " ")
+        t3 <- triwordfreq[triwordfreq$start==t11,]
+        if (length(t3$end)==0){
+          t2 <- biwordfreq[biwordfreq$start==t1[length(t1)],]
+          if (length(t2$end)==0){
+            head(uniwordfreq$word,5)
+          } else {
+            head(t2$end,5)
+          }
+        } else {
+          head(t3$end,5)
+        }
+      } else {
+        head(t4$end,5)
+      }
+    }
+  }
+}
+optback <- function(t1,s1){
+  if (length(t1)==1){
+    t2 <- biwordfreq[biwordfreq$start==t1,]
+    t5 <- t2[t2$end==s1,]
+    paste("group 2:",t5$freq, sep =" ")
+  } else {
+    if (length(t1)==2){
+      t2 <- biwordfreq[biwordfreq$start==t1[2],]
+      t3 <- triwordfreq[triwordfreq$start==t1,]
+      t5 <- t2[t2$end==s1,]
+      t6 <- t3[t3$end==s1,]
+      paste("group 2:",t5$freq, "group 3:",t6$freq,sep =" ")
+    } else {
+      t2 <- biwordfreq[biwordfreq$start==t1[length(t1)],]
+      t30 <- paste(t1[length(t1)-1],t1[length(t1)],sep = " ")
+      t3 <- triwordfreq[triwordfreq$start==t30,]
+      t40 <- paste(t1[length(t1)-2],t1[length(t1)-1],t1[length(t1)],sep = " ")
+      t4 <- quadwordfreq[quadwordfreq$start==t40,]
+      t5 <- t2[t2$end==s1,]
+      t6 <- t3[t3$end==s1,]
+      t7 <- t4[t4$end==s1,]
+      paste("group 2:",t5$freq, "group 3:",t6$freq,"group 4:",t7$freq, sep =" ")
+    }
+  }
+}
+```
+
+## Checking the answers
+
+```{r echo=TRUE}
+txt1 <- "The guy in front of me just bought a pound of bacon, a bouquet, and a case of"
+t1 <- testing(txt1)
+topback(t1)
+s1 <- "beer"
+optback(t1,s1)
+s1 <- "cheese"
+optback(t1,s1)
+s1 <- "pretzels"
+optback(t1,s1)
+s1 <- "soda"
+optback(t1,s1)
+txt1 <- "You're the reason why I smile everyday. Can you follow me please? It would mean the"
+t1 <- testing(txt1)
+topback(t1)
+s1 <- "universe"
+optback(t1,s1)
+s1 <- "most"
+optback(t1,s1)
+s1 <- "best"
+optback(t1,s1)
+s1 <- "world"
+optback(t1,s1)
+txt1 <- "Hey sunshine, can you follow me and make me the"
+t1 <- testing(txt1)
+topback(t1)
+s1 <- "happiest"
+optback(t1,s1)
+s1 <- "smelliest"
+optback(t1,s1)
+s1 <- "saddest"
+optback(t1,s1)
+s1 <- "bluest"
+optback(t1,s1)
+txt1 <- "Very early observations on the Bills game: Offense still struggling but the"
+t1 <- testing(txt1)
+topback(t1)
+s1 <- "players"
+optback(t1,s1)
+s1 <- "referees"
+optback(t1,s1)
+s1 <- "crowd"
+optback(t1,s1)
+s1 <- "defense"
+optback(t1,s1)
+txt1 <- "Go on a romantic date at the"
+t1 <- testing(txt1)
+topback(t1)
+s1 <- "mall"
+optback(t1,s1)
+s1 <- "grocery"
+optback(t1,s1)
+s1 <- "beach"
+optback(t1,s1)
+s1 <- "movies"
+optback(t1,s1)
+txt1 <- "Well I'm pretty sure my granny has some old bagpipes in her garage I'll dust them off and be on my"
+t1 <- testing(txt1)
+topback(t1)
+s1 <- "horse"
+optback(t1,s1)
+s1 <- "motorcycle"
+optback(t1,s1)
+s1 <- "phone"
+optback(t1,s1)
+s1 <- "way"
+optback(t1,s1)
+txt1 <- "Ohhhhh #PointBreak is on tomorrow. Love that film and haven't seen it in quite some"
+t1 <- testing(txt1)
+topback(t1)
+s1 <- "weeks"
+optback(t1,s1)
+s1 <- "thing"
+optback(t1,s1)
+s1 <- "time"
+optback(t1,s1)
+s1 <- "years"
+optback(t1,s1)
+txt1 <- "After the ice bucket challenge Louis will push his long wet hair out of his eyes with his little"
+t1 <- testing(txt1)
+topback(t1)
+s1 <- "ears"
+optback(t1,s1)
+s1 <- "eyes"
+optback(t1,s1)
+s1 <- "toes"
+optback(t1,s1)
+s1 <- "fingers"
+optback(t1,s1)
+txt1 <- "Be grateful for the good times and keep the faith during the"
+t1 <- testing(txt1)
+topback(t1)
+s1 <- "sad"
+optback(t1,s1)
+s1 <- "hard"
+optback(t1,s1)
+s1 <- "worse"
+optback(t1,s1)
+s1 <- "bad"
+optback(t1,s1)
+txt1 <- "If this isn't the cutest thing you've ever seen, then you must be"
+t1 <- testing(txt1)
+topback(t1)
+s1 <- "callous"
+optback(t1,s1)
+s1 <- "insensitive"
+optback(t1,s1)
+s1 <- "asleep"
+optback(t1,s1)
+s1 <- "insane"
+optback(t1,s1)
+txt1 <- "When you breathe, I want to be the air for you. I'll be there for you, I'd live and I'd"
+t1 <- testing(txt1)
+topback(t1)
+s1 <- "give"
+optback(t1,s1)
+s1 <- "sleep"
+optback(t1,s1)
+s1 <- "eat"
+optback(t1,s1)
+s1 <- "die"
+optback(t1,s1)
+txt1 <- "Guy at my table's wife got up to go to the bathroom and I asked about dessert and he started telling me about his"
+t1 <- testing(txt1)
+topback(t1)
+s1 <- "spiritual"
+optback(t1,s1)
+s1 <- "horticultural"
+optback(t1,s1)
+s1 <- "marital"
+optback(t1,s1)
+s1 <- "financial"
+optback(t1,s1)
+txt1 <- "I'd give anything to see arctic monkeys this"
+t1 <- testing(txt1)
+topback(t1)
+s1 <- "morning"
+optback(t1,s1)
+s1 <- "weekend"
+optback(t1,s1)
+s1 <- "month"
+optback(t1,s1)
+s1 <- "decade"
+optback(t1,s1)
+txt1 <- "Talking to your mom has the same effect as a hug and helps reduce your"
+t1 <- testing(txt1)
+topback(t1)
+s1 <- "sleepiness"
+optback(t1,s1)
+s1 <- "hunger"
+optback(t1,s1)
+s1 <- "happiness"
+optback(t1,s1)
+s1 <- "stress"
+optback(t1,s1)
+txt1 <- "When you were in Holland you were like 1 inch away from me but you hadn't time to take a"
+t1 <- testing(txt1)
+topback(t1)
+s1 <- "picture"
+optback(t1,s1)
+s1 <- "walk"
+optback(t1,s1)
+s1 <- "look"
+optback(t1,s1)
+s1 <- "minute"
+optback(t1,s1)
+txt1 <- "I'd just like all of these questions answered, a presentation of evidence, and a jury to settle the"
+t1 <- testing(txt1)
+topback(t1)
+s1 <- "incident"
+optback(t1,s1)
+s1 <- "matter"
+optback(t1,s1)
+s1 <- "account"
+optback(t1,s1)
+s1 <- "case"
+optback(t1,s1)
+txt1 <- "I can't deal with unsymetrical things. I can't even hold an uneven number of bags of groceries in each"
+t1 <- testing(txt1)
+topback(t1)
+s1 <- "arm"
+optback(t1,s1)
+s1 <- "toe"
+optback(t1,s1)
+s1 <- "finger"
+optback(t1,s1)
+s1 <- "hand"
+optback(t1,s1)
+txt1 <- "Every inch of you is perfect from the bottom to the"
+t1 <- testing(txt1)
+topback(t1)
+s1 <- "side"
+optback(t1,s1)
+s1 <- "middle"
+optback(t1,s1)
+s1 <- "top"
+optback(t1,s1)
+s1 <- "center"
+optback(t1,s1)
+txt1 <- "I'm thankful my childhood was filled with imagination and bruises from playing"
+t1 <- testing(txt1)
+topback(t1)
+s1 <- "outside"
+optback(t1,s1)
+s1 <- "weekly"
+optback(t1,s1)
+s1 <- "daily"
+optback(t1,s1)
+s1 <- "inside"
+optback(t1,s1)
+txt1 <- "I like how the same people are in almost all of Adam Sandler's"
+t1 <- testing(txt1)
+topback(t1)
+s1 <- "pictures"
+optback(t1,s1)
+s1 <- "novels"
+optback(t1,s1)
+s1 <- "movies"
+optback(t1,s1)
+s1 <- "stories"
+optback(t1,s1)
+```
+
+# Conclusion
+
+
